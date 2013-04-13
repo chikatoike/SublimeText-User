@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # This script should not depend any module except standard library.
 import glob
-# import time
 import subprocess
 import os
 import sys
@@ -9,54 +8,47 @@ from os.path import expandvars, expanduser, join, abspath, relpath, exists
 from os.path import basename, dirname, normcase, splitext
 
 
-additional_exclue_packages = [
-    'thirdparty',
-    'PyV8',
-]
+repository_root = expandvars(r'$DROPBOX_PATH\home\SublimeText')
 
-
-exclude_options = [
-    # ignore directory
-    '/xd',
-    '.git',
-    '.hg',
-    'SublimeREPLHistory',  # User/SublimeREPLHistory
-    'OmniMarkupPreviewer',  # User/OmniMarkupPreviewer
-    '__*',
-    # ignore file
-    '/xf',
-    '*.pyc',
-    '*.cache',
-    '*.json',
-    '*.log',
-    'imesupport_hook_x64.dll',
-    'imesupport_hook_x86.dll',
-    '_*.sublime-macro',
-    '*.sublime-workspace',
-    # '*.sublime-settings',
-    'Package Control.last-run',
-    'Package Control.sublime-settings',
-    'FileHistory.sublime-settings',
-    'SublimeServer.sublime-settings',
-    'encoding_cache.json',  # ConvertUTF8
-    'MediaPlayer 0*',
-]
-
-
-# pair_path_list = [
-#     (join(repo_base, 'User/lib/webapp'), join(repo_base, 'ShaderPreview/shaderpreview/webapp'))
-# ]
+config = {
+    # TODO cooperate with "folder_exclude_patterns" in .sublime-project
+    'additional_exclude_packages': [
+        'thirdparty',
+        'PyV8',
+    ],
+    'exclude_options': [
+        # ignore directory
+        '/xd',
+        '.git',
+        '.hg',
+        'SublimeREPLHistory',  # User/SublimeREPLHistory
+        'OmniMarkupPreviewer',  # User/OmniMarkupPreviewer
+        'node_modules',
+        'packages',
+        '__*',
+        # ignore file
+        '/xf',
+        '*.pyc',
+        '*.cache',
+        '*.json',
+        '*.log',
+        'imesupport_hook_x64.dll',
+        'imesupport_hook_x86.dll',
+        '_*.sublime-macro',
+        '*.sublime-workspace',
+        # '*.sublime-settings',
+        'Package Control.last-run',
+        'Package Control.sublime-settings',
+        'FileHistory.sublime-settings',
+        'SublimeServer.sublime-settings',
+        'encoding_cache.json',  # ConvertUTF8
+        'MediaPlayer 0*',
+    ]
+}
 
 
 def on_pre_sync(src, dest):
     print('external_package_sync: src: ' + src + ' dest: ' + dest)
-    # try:
-    #     if src.find('IMESupport') != -1:
-    #         from IMESupport import imesupportplugin
-    #         if hasattr(imesupportplugin, 'unload_handler'):
-    #             imesupportplugin.unload_handler()
-    # except Exception as e:
-    #     print(e)
 
 
 repo_base = None
@@ -67,13 +59,18 @@ packages_path = None
 startupinfo = None
 if os.name == "nt":
     startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    if hasattr(subprocess, 'STARTF_USESHOWWINDOW'):
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    else:
+        # Workaround for Python 2.7
+        import _subprocess
+        startupinfo.dwFlags |= _subprocess.STARTF_USESHOWWINDOW
 
 
 def init():
     global repo_base
     global packages_path
-    repo_base = expandvars(r'$DROPBOX_PATH\home\SublimeText')
+    repo_base = repository_root
     packages_path = sublime_packages_path()
 
 
@@ -84,7 +81,6 @@ def description():
 
 def sublime_version():
     try:
-        # sublime = __import__('sublime')
         import sublime
         return int(sublime.version()) // 1000
     except ImportError:
@@ -177,7 +173,7 @@ def package_sync_status():
     packages = all_packages()
     installed = installed_packages()
     pristine = pristine_packages()
-    exclude = list(set(pristine) | set(installed) | set(additional_exclue_packages))
+    exclude = list(set(pristine) | set(installed) | set(config['additional_exclude_packages']))
     not_package_controled = list(set(packages) - set(pristine) - set(installed))
     # user_installed_packages = list(set(packages) - set(pristine))
     unknown = list(set(not_package_controled) - set(repository))
@@ -195,7 +191,7 @@ def package_sync_status():
 def execute_sync(src, dest, exclude_packages=[]):
     if os.name == 'nt':
         try:
-            cmd = ['robocopy', src, dest, '/mir'] + exclude_options + ['/xd'] + exclude_packages
+            cmd = ['robocopy', src, dest, '/mir'] + config['exclude_options'] + ['/xd'] + exclude_packages
             subprocess.check_call(cmd, startupinfo=startupinfo)
         except subprocess.CalledProcessError as e:
             if e.returncode > 3:
