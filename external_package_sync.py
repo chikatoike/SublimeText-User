@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 # This script should not depend any module except standard library.
-import glob
-import subprocess
 import os
 import sys
+import glob
+import shutil
+import subprocess
 from os.path import expandvars, expanduser, join, abspath, relpath, exists
 from os.path import basename, dirname, normcase, splitext
 
 
 repository_root = expandvars(r'$DROPBOX_PATH\home\SublimeText')
+dry_run = False
 
 config = {
     # TODO cooperate with "folder_exclude_patterns" in .sublime-project
@@ -67,11 +69,11 @@ if os.name == "nt":
         startupinfo.dwFlags |= _subprocess.STARTF_USESHOWWINDOW
 
 
-def init():
+def init(packages=None):
     global repo_base
     global packages_path
     repo_base = repository_root
-    packages_path = sublime_packages_path()
+    packages_path = packages if packages else sublime_packages_path()
 
 
 def description():
@@ -114,6 +116,9 @@ def input_ok_cancel(message):
         import sublime
         return sublime.ok_cancel_dialog(message)
     except ImportError:
+        if __name__ != '__main__':
+            # Do not prompt on running tests.
+            return True
         ret = raw_input(message + '\n(input "ok" or "cancel"):')
         return ret == 'ok'
 
@@ -188,10 +193,14 @@ def package_sync_status():
     }
 
 
-def execute_sync(src, dest, exclude_packages=[]):
+def execute_sync(src, dest, dest_exclude=[]):
     if os.name == 'nt':
         try:
-            cmd = ['robocopy', src, dest, '/mir'] + config['exclude_options'] + ['/xd'] + exclude_packages
+            extra = []
+            if dry_run:
+                extra.append('/L')
+            dest_exclude = [join(dest, i) for i in dest_exclude]
+            cmd = ['robocopy', src, dest, '/mir'] + extra + config['exclude_options'] + ['/xd'] + dest_exclude
             subprocess.check_call(cmd, startupinfo=startupinfo)
         except subprocess.CalledProcessError as e:
             if e.returncode > 3:
@@ -340,7 +349,6 @@ try:
 
     class ExternalPackageEditCopyCommand(sublime_plugin.TextCommand):
         def run(self, edit):
-            import shutil
             src = self.view.file_name()
             dest = join(repo_base, 'User', basename(src))
             if src.endswith('.py'):
@@ -368,6 +376,72 @@ except ImportError:
     pass
 
 
+import unittest
+import tempfile
+from os.path import isdir
+from contextlib import contextmanager
+
+
+class Test(unittest.TestCase):
+    test_src = join(abspath(dirname(__file__)), 'Backup')
+    test_dest = join(tempfile.gettempdir(), 'Sublime Packages')
+
+    def setUp(self):
+        self.clean_dir(self.test_dest)
+        with pushd(self.test_dest):
+            self.make_pseudo_dest()
+
+        init(packages=self.test_dest)
+
+    @staticmethod
+    def clean_dir(dir_path):
+        if exists(dir_path):
+            for child in os.listdir(dir_path):
+                path = join(dir_path, child)
+                if isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+        else:
+            os.mkdir(dir_path)
+
+    def make_pseudo_dest(self):
+        os.mkdir('User')
+        os.mkdir('LiveDevelopment')
+        os.mkdir('Linter')
+        with open('User/Package Control.sublime-settings', 'w') as f:
+            f.write("""
+                {
+                    "installed_packages":
+                    [
+                        "LiveDevelopment",
+                        "Linter"
+                    ]
+                }
+                """)
+
+    def test_sync2(self):
+        test_excludes = ['LiveDevelopment']
+        execute_sync(self.test_src, self.test_dest, test_excludes)
+        for name in test_excludes:
+            self.assertTrue(exists(join(self.test_dest, name)))
+
+
+class TestSync(Test):
+    def test_xxx(self):
+        sync_all_packages()
+
+
+@contextmanager
+def pushd(to):
+    old_cwd = os.getcwd()
+    os.chdir(to)
+    try:
+        yield
+    finally:
+        os.chdir(old_cwd)
+
+
 def main():
     init()
     description()
@@ -376,5 +450,7 @@ def main():
     sync_all_packages()
 
 if __name__ == '__main__':
+    if '--dry-run' in sys.argv:
+        dry_run = True
     # sys.argv.append(2)
     main()
