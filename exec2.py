@@ -50,6 +50,10 @@ class AsyncProcess(object):
         for k, v in proc_env.items():
             proc_env[k] = os.path.expandvars(v)
 
+        if sys.version_info < (3, 0, 0):
+            for k, v in proc_env.items():
+                proc_env[k] = v.encode(sys.getfilesystemencoding())
+
         if shell_cmd and sys.platform == "win32":
             # Use shell=True on Windows, so shell_cmd is passed through with the correct escaping
             self.proc = subprocess.Popen(shell_cmd, stdout=subprocess.PIPE,
@@ -117,7 +121,7 @@ class AsyncProcess(object):
 class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
     def run(self, cmd = None, shell_cmd = None, file_regex = "", line_regex = "", working_dir = "",
             encoding = "utf-8", env = {}, quiet = False, kill = False,
-            word_wrap = True, syntax = "Packages/Text/Plain text.tmLanguage",
+            word_wrap = True, syntax = None,
             # Catches "path" and "shell"
             **kwargs):
 
@@ -130,7 +134,10 @@ class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
 
         if not hasattr(self, 'output_view'):
             # Try not to call get_output_panel until the regexes are assigned
-            self.output_view = self.window.create_output_panel("exec")
+            if hasattr(self.window, 'create_output_panel'):
+                self.output_view = self.window.create_output_panel("exec")
+            else:
+                self.output_view = self.window.get_output_panel("exec")
 
         # Default the to the current files directory if no working directory was given
         if (working_dir == "" and self.window.active_view()
@@ -144,11 +151,18 @@ class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
         self.output_view.settings().set("line_numbers", False)
         self.output_view.settings().set("gutter", False)
         self.output_view.settings().set("scroll_past_end", False)
-        self.output_view.assign_syntax(syntax)
+        if syntax:
+            if hasattr(self.window, 'assign_syntax'):
+                self.output_view.assign_syntax(syntax)
+            else:
+                self.output_view.set_syntax_file(syntax)
 
         # Call create_output_panel a second time after assigning the above
         # settings, so that it'll be picked up as a result buffer
-        self.window.create_output_panel("exec")
+        if hasattr(self.window, 'create_output_panel'):
+            self.window.create_output_panel("exec")
+        else:
+            self.window.get_output_panel("exec")
 
         self.encoding = encoding
         self.quiet = quiet
@@ -235,7 +249,7 @@ class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
             else:
                 self.append_string(proc, ("[Finished in %.1fs with exit code %d]\n"
                     % (elapsed, exit_code)))
-                self.append_string(proc, self.debug_text)
+                # self.append_string(proc, self.debug_text)
 
         if proc != self.proc:
             return
@@ -251,3 +265,19 @@ class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
 
     def on_finished(self, proc):
         sublime.set_timeout(functools.partial(self.finish, proc), 0)
+
+
+if int(sublime.version()) < 3000:
+    class AppendCommand(sublime_plugin.TextCommand):
+        def run(self, edit, characters, force=False, scroll_to_end=False):
+            view = self.view
+            selection_was_at_end = (len(view.sel()) == 1
+                and view.sel()[0]
+                    == sublime.Region(view.size()))
+            view.set_read_only(False)
+            edit = view.begin_edit()
+            view.insert(edit, view.size(), characters)
+            if selection_was_at_end:
+                view.show(view.size())
+            view.end_edit(edit)
+            view.set_read_only(True)
