@@ -1,13 +1,19 @@
-import sublime, sublime_plugin
 import os, sys
 import threading
 import subprocess
 import functools
 import time
 
+
+helper_script = os.path.abspath(__file__)
+
+
 class ProcessListener(object):
     def on_data(self, proc, data):
         pass
+
+    def on_data_error(self, proc, data):
+        self.on_data(proc, data)
 
     def on_finished(self, proc):
         pass
@@ -16,10 +22,20 @@ class ProcessListener(object):
 # ProcessListener (on a separate thread)
 class AsyncProcess(object):
     def __init__(self, cmd, shell_cmd, env, listener,
+            helper=False,
             # "path" is an option in build systems
             path="",
             # "shell" is an options in build systems
             shell=False):
+
+        if os.name != "nt":
+            helper = False
+        stdin = None
+        if helper:
+            stdin = subprocess.PIPE
+            if cmd:
+                python_exe = which('python.exe')
+                cmd = [python_exe, helper_script] + cmd
 
         if not shell_cmd and not cmd:
             raise ValueError("shell_cmd or cmd is required")
@@ -54,27 +70,28 @@ class AsyncProcess(object):
             for k, v in proc_env.items():
                 proc_env[k] = v.encode(sys.getfilesystemencoding())
 
-        if shell_cmd and sys.platform == "win32":
-            # Use shell=True on Windows, so shell_cmd is passed through with the correct escaping
-            self.proc = subprocess.Popen(shell_cmd, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=True)
-        elif shell_cmd and sys.platform == "darwin":
-            # Use a login shell on OSX, otherwise the users expected env vars won't be setup
-            self.proc = subprocess.Popen(["/bin/bash", "-l", "-c", shell_cmd], stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=False)
-        elif shell_cmd and sys.platform == "linux":
-            # Explicitly use /bin/bash on Linux, to keep Linux and OSX as
-            # similar as possible. A login shell is explicitly not used for
-            # linux, as it's not required
-            self.proc = subprocess.Popen(["/bin/bash", "-c", shell_cmd], stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=False)
-        else:
-            # Old style build system, just do what it asks
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=shell)
-
-        if path:
-            os.environ["PATH"] = old_path
+        try:
+            if shell_cmd and sys.platform == "win32":
+                # Use shell=True on Windows, so shell_cmd is passed through with the correct escaping
+                self.proc = subprocess.Popen(shell_cmd, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=True, stdin=stdin)
+            elif shell_cmd and sys.platform == "darwin":
+                # Use a login shell on OSX, otherwise the users expected env vars won't be setup
+                self.proc = subprocess.Popen(["/bin/bash", "-l", "-c", shell_cmd], stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=False, stdin=stdin)
+            elif shell_cmd and sys.platform == "linux":
+                # Explicitly use /bin/bash on Linux, to keep Linux and OSX as
+                # similar as possible. A login shell is explicitly not used for
+                # linux, as it's not required
+                self.proc = subprocess.Popen(["/bin/bash", "-c", shell_cmd], stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=False, stdin=stdin)
+            else:
+                # Old style build system, just do what it asks
+                self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=shell, stdin=stdin)
+        finally:
+            if path:
+                os.environ["PATH"] = old_path
 
         if self.proc.stdout:
             threading.Thread(target=self.read_stdout).start()
@@ -85,7 +102,12 @@ class AsyncProcess(object):
     def kill(self):
         if not self.killed:
             self.killed = True
-            self.proc.terminate()
+            if sublime.platform() == 'windows':
+                self.proc.stdin.close()
+                self.proc.wait()
+                # self.proc.terminate()
+            else:
+                self.proc.terminate()
             self.listener = None
 
     def poll(self):
@@ -113,10 +135,67 @@ class AsyncProcess(object):
 
             if len(data) > 0:
                 if self.listener:
-                    self.listener.on_data(self, data)
+                    self.listener.on_data_error(self, data)
             else:
                 self.proc.stderr.close()
                 break
+
+
+def which(command):
+    for path in os.environ["PATH"].split(os.pathsep):
+        if os.path.exists(path) and command in os.listdir(path):
+            return os.path.join(path, command)
+
+
+if __name__ == '__main__':
+    import ctypes
+
+    CTRL_C_EVENT = 0
+    CTRL_BREAK_EVENT = 1
+
+    def SendCtrlC(proc, with_myself):
+        ctypes.windll.kernel32.FreeConsole()
+        ctypes.windll.kernel32.AttachConsole(proc.pid)
+        if not with_myself:
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(0, 1)
+        ctypes.windll.kernel32.GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)
+
+    class CommandRunner(ProcessListener):
+        def on_data(self, proc, data):
+            sys.stdout.write(data)
+
+        def on_data_error(self, proc, data):
+            sys.stderr.write(data)
+
+        def on_finished(self, proc):
+            exit_code = proc.exit_code()
+            if exit_code == 0 or exit_code is None:
+                os._exit(0)
+            else:
+                os._exit(exit_code)
+
+    def run(cmd, shell_cmd, **kwargs):
+        # not supported shell_cmd
+        # assert shell_cmd is not None
+        async = AsyncProcess(cmd, shell_cmd, {}, CommandRunner(), **kwargs)
+        # Waiting for kill from parent process.
+        data = sys.stdin.read(1)
+        if len(data) > 0:
+            assert False, "Unexpected input"
+        # # SendCtrlC(async.proc, True)
+
+    if len(sys.argv) > 1:
+        run(sys.argv[1:], None, shell=False)
+    else:
+        run(None, 'python.exe -c "import time; while True: print(time); time.sleep(1)"')
+        # run(None, 'python.exe -c "print(123)"')
+        # run(None, 'python.exe --help1')
+    sys.exit()
+
+
+import sublime
+import sublime_plugin
+
 
 class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
     def run(self, cmd = None, shell_cmd = None, file_regex = "", line_regex = "", working_dir = "",
