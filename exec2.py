@@ -1,3 +1,21 @@
+import os
+import sys
+import ctypes
+
+
+helper_script = os.path.abspath(__file__)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) == 2:
+        CTRL_C_EVENT = 0
+        pid = int(sys.argv[1])
+        ctypes.windll.kernel32.FreeConsole()
+        ctypes.windll.kernel32.AttachConsole(pid)
+        ctypes.windll.kernel32.GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)
+        sys.exit()
+
+
 import sublime, sublime_plugin
 import os, sys
 import threading
@@ -85,7 +103,13 @@ class AsyncProcess(object):
     def kill(self):
         if not self.killed:
             self.killed = True
-            self.proc.terminate()
+            if sublime.platform() == 'windows':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                subprocess.check_call(['python.exe', helper_script, str(self.proc.pid)], startupinfo=startupinfo)
+                self.proc.wait()
+            else:
+                self.proc.terminate()
             self.listener = None
 
     def poll(self):
