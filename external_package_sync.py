@@ -17,6 +17,7 @@ config = {
     'additional_exclude_packages': [
         'thirdparty',
         'PyV8',
+        'SublimeClang',
     ],
     'exclude_options': [
         # ignore directory
