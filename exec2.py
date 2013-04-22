@@ -1,6 +1,5 @@
 import os
 import sys
-import ctypes
 
 
 helper_script = os.path.abspath(__file__)
@@ -8,6 +7,7 @@ helper_script = os.path.abspath(__file__)
 
 if __name__ == '__main__':
     if len(sys.argv) == 2:
+        import ctypes
         CTRL_C_EVENT = 0
         pid = int(sys.argv[1])
         ctypes.windll.kernel32.FreeConsole()
@@ -229,6 +229,7 @@ class ExecCommand(sublime_plugin.WindowCommand, ProcessListener):
             # Forward kwargs to AsyncProcess
             self.proc = AsyncProcess(cmd, shell_cmd, merged_env, self, **kwargs)
         except Exception as e:
+            print('[AsyncProcess]' + str(e))
             self.append_string(None, str(e) + "\n")
             self.append_string(None, self.debug_text + "\n")
             if not self.quiet:
