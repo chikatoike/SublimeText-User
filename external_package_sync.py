@@ -6,19 +6,26 @@ import glob
 import shutil
 import subprocess
 from os.path import expandvars, expanduser, join, abspath, relpath, exists
-from os.path import basename, dirname, normcase, splitext
+from os.path import basename, dirname, normcase, splitext, islink
 
 
-repository_root = expandvars(r'$DROPBOX_PATH\home\SublimeText')
 dry_run = False
 
 config = {
     # TODO cooperate with "folder_exclude_patterns" in .sublime-project
-    'additional_exclude_packages': [
-        'thirdparty',
-        'PyV8',
-        'SublimeClang',
-    ],
+    'additional_exclude_packages': {
+        'all': [
+            'thirdparty',
+            'PyV8',
+            'SublimeClang',
+        ],
+        'nt': [],
+        'mac': [],
+        'posix': [
+            'UserWindows',
+            'IMESupport',
+        ],
+    },
     'exclude_options': [
         # ignore directory
         '/xd',
@@ -71,6 +78,19 @@ if os.name == "nt":
 
 
 def init(packages=None):
+    if 'DROPBOX_PATH' not in os.environ:
+        if os.name == "nt":
+            os.environ['DROPBOX_PATH'] = expandvars('$USERPROFILE\\Dropbox')
+        else:
+            os.environ['DROPBOX_PATH'] = expandvars('$HOME/Dropbox')
+
+    if os.name == 'nt':
+        repository_root = expandvars(r'$DROPBOX_PATH\home\SublimeText')
+    elif os.name == 'posix':
+        repository_root = expandvars(r'$DROPBOX_PATH/home/SublimeText')
+    else:
+        raise NotImplementedError()
+
     global repo_base
     global packages_path
     repo_base = repository_root
@@ -105,9 +125,9 @@ def sublime_packages_path():
         if os.name == 'nt':
             return expandvars('$APPDATA\Sublime Text %d\Packages' % version)
         elif os.name == 'mac':
-            return expanduser(expandvars('~/Library/Application Support/Sublime Text %d/Packages/' % version))
+            return expanduser(expandvars('~/Library/Application Support/Sublime Text %d/Packages' % version))
         elif os.name == 'posix':
-            return expanduser(expandvars('~/.config/sublime-text-2/Packages/' % version))
+            return expanduser(expandvars('~/.config/sublime-text-%d/Packages' % version))
         else:
             raise NotImplementedError()
 
@@ -157,7 +177,7 @@ def installed_packages():
 def pristine_packages():
     packages = []
     # Pristine Packages for Sublime Text 2
-    pristine = join(dirname(packages_path), 'Pristine Packages')
+    pristine = join(packages_path, '..', 'Pristine Packages')
     if exists(pristine):
         full_paths = glob.glob(join(pristine, '*.sublime-package'))
         packages += [splitext(basename(path))[0] for path in full_paths]
@@ -179,7 +199,9 @@ def package_sync_status():
     packages = all_packages()
     installed = installed_packages()
     pristine = pristine_packages()
-    exclude = list(set(pristine) | set(installed) | set(config['additional_exclude_packages']))
+    additional_exclude_packages = config['additional_exclude_packages'].get('all', [])
+    additional_exclude_packages += config['additional_exclude_packages'].get(os.name, [])
+    exclude = list(set(pristine) | set(installed) | set(additional_exclude_packages))
     not_package_controled = list(set(packages) - set(pristine) - set(installed))
     # user_installed_packages = list(set(packages) - set(pristine))
     unknown = list(set(not_package_controled) - set(repository))
@@ -195,23 +217,30 @@ def package_sync_status():
 
 
 def execute_sync(src, dest, dest_exclude=[]):
-    if os.name == 'nt':
-        try:
-            extra = []
-            if dry_run:
-                extra.append('/L')
-            dest_exclude = [join(dest, i) for i in dest_exclude]
-            cmd = ['robocopy', src, dest, '/mir'] + extra + config['exclude_options'] + ['/xd'] + dest_exclude
-            subprocess.check_call(cmd, startupinfo=startupinfo)
-        except subprocess.CalledProcessError as e:
-            if e.returncode > 3:
-                error_message(
-                    'external_package_sync: returncode: ' + str(e.returncode) + '\n' +
-                    'external_package_sync: command line:\n' +
-                    ' '.join([s if s.count(' ') == 0 else '"' + s + '"' for s in cmd]))
-                raise
-    else:
-        raise NotImplementedError()
+    try:
+        extra = []
+        if dry_run:
+            extra.append('/L')
+        dest_exclude = [join(dest, i) for i in dest_exclude]
+        cmd = ['robocopy', src, dest, '/mir'] + extra + config['exclude_options'] + ['/xd'] + dest_exclude
+        subprocess.check_call(cmd, startupinfo=startupinfo)
+    except subprocess.CalledProcessError as e:
+        if e.returncode > 3:
+            error_message(
+                'external_package_sync: returncode: ' + str(e.returncode) + '\n' +
+                'external_package_sync: command line:\n' +
+                ' '.join([s if s.count(' ') == 0 else '"' + s + '"' for s in cmd]))
+            raise
+
+
+def sync_link(src, dest, add, remove):
+    for name in remove:
+        path = join(dest, name)
+        if islink(path):
+            os.unlink(path)
+
+    for name in add:
+        os.symlink(join(src, name), join(dest, name))
 
 
 def sync_all_packages():
@@ -225,7 +254,13 @@ def sync_all_packages():
         ])):
             print('external_package_sync: canceled.')
             return
-    execute_sync(repo_base, packages_path, status['exclude'])
+
+    if os.name == 'nt':
+        execute_sync(repo_base, packages_path, status['exclude'])
+    elif os.name == 'posix':
+        sync_link(repo_base, packages_path, status['add'], status['remove'])
+    else:
+        raise NotImplementedError()
 
 
 # def sync_file():
