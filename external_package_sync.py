@@ -9,12 +9,17 @@ from os.path import expandvars, expanduser, join, abspath, relpath, exists
 from os.path import basename, dirname, normcase, splitext, islink
 
 
+USERVARS = 'UserVariable.sublime-settings'
+
+
+# options
 dry_run = False
 
 config = {
     # TODO cooperate with "folder_exclude_patterns" in .sublime-project
     'additional_exclude_packages': {
         'all': [
+            'UserWork',
             'thirdparty',
             'PyV8',
             'SublimeClang',
@@ -53,6 +58,8 @@ config = {
         'SublimeServer.sublime-settings',
         'encoding_cache.json',  # ConvertUTF8
         'MediaPlayer 0*',
+        'UserShelve.sublime-settings',
+        USERVARS,
     ]
 }
 
@@ -61,6 +68,7 @@ def on_pre_sync(src, dest):
     print('external_package_sync: src: ' + src + ' dest: ' + dest)
 
 
+# variables
 repo_base = None
 packages_path = None
 
@@ -95,6 +103,14 @@ def init(packages=None):
     global packages_path
     repo_base = repository_root
     packages_path = packages if packages else sublime_packages_path()
+
+    try:
+        import sublime
+        settings = sublime.load_settings(USERVARS)
+        settings.set('user_packages_path', repo_base)
+        sublime.save_settings(USERVARS)
+    except ImportError:
+        pass
 
 
 def description():
